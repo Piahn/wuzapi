@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -386,6 +387,16 @@ func main() {
 	// Set DB reference in S3Manager for lazy client initialization
 	GetS3Manager().SetDB(db)
 
+	// Initialize the schema
+	if err = initializeSchema(db); err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize schema")
+		// Perform cleanup before exiting
+		if err := db.Close(); err != nil {
+			log.Error().Err(err).Msg("Failed to close database connection during cleanup")
+		}
+		os.Exit(1)
+	}
+
 	var dbLog waLog.Logger
 	if *waDebug != "" {
 		dbLog = waLog.Stdout("Database", *waDebug, *colorOutput)
@@ -401,22 +412,23 @@ func main() {
 		)
 		container, err = sqlstore.New(context.Background(), "postgres", storeConnStr, dbLog)
 	} else {
-		storeConnStr = "file:" + filepath.ToSlash(filepath.Join(config.Path, "main.db")) + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_timeout=10000"
-		container, err = sqlstore.New(context.Background(), "sqlite", storeConnStr, dbLog)
+		storeConnStr = "file:" + filepath.ToSlash(filepath.Join(config.Path, "main.db")) + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)"
+		storeDB, dbErr := sql.Open("sqlite", storeConnStr)
+		if dbErr != nil {
+			log.Fatal().Err(dbErr).Msg("Error opening sqlite for whatsmeow store")
+			os.Exit(1)
+		}
+		storeDB.SetMaxOpenConns(1)
+		whatsmeowContainer := sqlstore.NewWithDB(storeDB, "sqlite", dbLog)
+		if err = whatsmeowContainer.Upgrade(context.Background()); err != nil {
+			log.Fatal().Err(err).Msg("Error upgrading whatsmeow store")
+			os.Exit(1)
+		}
+		container = whatsmeowContainer
 	}
 
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error creating sqlstore")
-		os.Exit(1)
-	}
-
-	// Initialize the schema
-	if err = initializeSchema(db); err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize schema")
-		// Perform cleanup before exiting
-		if err := db.Close(); err != nil {
-			log.Error().Err(err).Msg("Failed to close database connection during cleanup")
-		}
 		os.Exit(1)
 	}
 

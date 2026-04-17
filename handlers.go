@@ -1918,298 +1918,22 @@ func (s *server) SendLocation() http.HandlerFunc {
 	}
 }
 
-// Sends Buttons
+// Sends Buttons (not implemented, does not work)
 func (s *server) SendButtons() http.HandlerFunc {
 
 	type buttonStruct struct {
-		Type        string `json:"type"`         // "reply" (default) | "cta_url" | "cta_call" | "copy"
-		Title       string `json:"title"`        // Texto do botão (max 20 caracteres)
-		Text        string `json:"text"`         // Fallback para Title
-		ButtonText  string `json:"buttonText"`   // Fallback para Title (legacy)
-		ID          string `json:"id"`           // ID do botão
-		ButtonId    string `json:"buttonId"`     // Fallback para ID
-		URL         string `json:"url"`          // Necessário para cta_url
-		PhoneNumber string `json:"phone_number"` // Necessário para cta_call
-		CopyCode    string `json:"copy_code"`    // Necessário para copy
+		ButtonId   string
+		ButtonText string
 	}
-
-	type sendButtonsStruct struct {
-		Phone         string            `json:"Phone"`
-		Body          string            `json:"Body"`
-		Text          string            `json:"text"`
-		Title         string            `json:"Title"`
-		Footer        string            `json:"Footer"`
-		Image         string            `json:"Image"`
-		Buttons       []buttonStruct    `json:"Buttons"`
-		Id            string            `json:"Id"`
-		ContextInfo   waE2E.ContextInfo `json:"ContextInfo"`
-		QuotedMessage *waE2E.Message    `json:"QuotedMessage,omitempty"`
+	type textStruct struct {
+		Phone   string
+		Title   string
+		Buttons []buttonStruct
+		Id      string
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		client := clientManager.GetWhatsmeowClient(txtid)
 
-		if client == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
-
-		var t sendButtonsStruct
-		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
-
-		// --- Fallbacks e Validações Básicas ---
-		body := strings.TrimSpace(t.Body)
-		if body == "" {
-			body = strings.TrimSpace(t.Text)
-		}
-
-		if t.Phone == "" || body == "" || len(t.Buttons) == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone, Body or Buttons"))
-			return
-		}
-
-		// --- Parse de Botões para NativeFlow (Interactive) ---
-		nativeBtns := make([]*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton, 0, len(t.Buttons))
-
-		for _, btn := range t.Buttons {
-			title := strings.TrimSpace(btn.Title)
-			if title == "" {
-				title = strings.TrimSpace(btn.Text)
-			}
-			if title == "" {
-				title = strings.TrimSpace(btn.ButtonText)
-			}
-			if title == "" {
-				continue
-			}
-
-			// WhatsApp limita o título a 20 caracteres nos botões
-			if runes := []rune(title); len(runes) > 20 {
-				title = string(runes[:20])
-			}
-
-			id := strings.TrimSpace(btn.ID)
-			if id == "" {
-				id = strings.TrimSpace(btn.ButtonId)
-			}
-			if id == "" {
-				id = title
-			}
-
-			var name string
-			var pm map[string]string
-
-			btnType := strings.ToLower(strings.TrimSpace(btn.Type))
-			if btnType == "" {
-				btnType = "reply"
-			}
-
-			switch btnType {
-			case "reply":
-				name = "quick_reply"
-				pm = map[string]string{"display_text": title, "id": id}
-			case "cta_url":
-				name = "cta_url"
-				pm = map[string]string{"display_text": title, "url": btn.URL, "merchant_url": btn.URL}
-			case "cta_call":
-				name = "cta_call"
-				pm = map[string]string{"display_text": title, "phone_number": btn.PhoneNumber}
-			case "copy":
-				name = "cta_copy"
-				pm = map[string]string{"display_text": title, "copy_code": btn.CopyCode}
-			default:
-				continue // Tipo desconhecido, ignora o botão
-			}
-
-			paramsJSON, _ := json.Marshal(pm)
-			nativeBtns = append(nativeBtns, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-				Name:             proto.String(name),
-				ButtonParamsJSON: proto.String(string(paramsJSON)),
-			})
-		}
-
-		if len(nativeBtns) == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("no valid buttons parsed"))
-			return
-		}
-
-		// --- Destinatário e Mensagem ID ---
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, err)
-			return
-		}
-
-		msgid := t.Id
-		if msgid == "" {
-			msgid = client.GenerateMessageID()
-		}
-
-		// --- Upload de Imagem (Header) ---
-		var imgMsg *waE2E.ImageMessage
-		if t.Image != "" {
-			var filedata []byte
-			if len(t.Image) > 10 && t.Image[:10] == "data:image" {
-				if du, decErr := dataurl.DecodeString(t.Image); decErr == nil {
-					filedata = du.Data
-				}
-			} else if isHTTPURL(t.Image) {
-				if data, _, fetchErr := fetchURLBytes(r.Context(), t.Image, openGraphImageMaxBytes); fetchErr == nil {
-					filedata = data
-				}
-			}
-
-			if len(filedata) > 0 {
-				uploaded, uploadErr := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
-				if uploadErr == nil {
-					imgMsg = &waE2E.ImageMessage{
-						URL:           proto.String(uploaded.URL),
-						DirectPath:    proto.String(uploaded.DirectPath),
-						MediaKey:      uploaded.MediaKey,
-						Mimetype:      proto.String(http.DetectContentType(filedata)),
-						FileEncSHA256: uploaded.FileEncSHA256,
-						FileSHA256:    uploaded.FileSHA256,
-						FileLength:    proto.Uint64(uint64(len(filedata))),
-					}
-				}
-			}
-		}
-
-		// --- ContextInfo (Citações/Responder) ---
-		var ctxInfo waE2E.ContextInfo
-		if t.ContextInfo.StanzaID != nil {
-			qm := t.QuotedMessage
-			if qm == nil {
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-			ctxInfo = waE2E.ContextInfo{
-				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
-				Participant:   proto.String(*t.ContextInfo.Participant),
-				QuotedMessage: qm,
-			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			ctxInfo.MentionedJID = t.ContextInfo.MentionedJID
-		}
-		if t.ContextInfo.IsForwarded != nil {
-			ctxInfo.IsForwarded = t.ContextInfo.IsForwarded
-		}
-
-		// --- Construção da InteractiveMessage ---
-		interactiveMsg := &waE2E.InteractiveMessage{
-			Header:      &waE2E.InteractiveMessage_Header{},
-			Body:        &waE2E.InteractiveMessage_Body{Text: proto.String(body)},
-			ContextInfo: &ctxInfo,
-			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-					Buttons:        nativeBtns,
-					MessageVersion: proto.Int32(1),
-				},
-			},
-		}
-
-		if t.Footer != "" {
-			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{Text: proto.String(t.Footer)}
-		}
-
-		// Prioridade para Imagem no Header, senão usa Título (Texto)
-		if imgMsg != nil {
-			interactiveMsg.Header.HasMediaAttachment = proto.Bool(true)
-			interactiveMsg.Header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{ImageMessage: imgMsg}
-		} else if t.Title != "" {
-			interactiveMsg.Header.Title = proto.String(t.Title)
-		}
-
-		finalMsg := &waE2E.Message{InteractiveMessage: interactiveMsg}
-
-		// --- Nó BIZ (Fundamental para renderizar os botões) ---
-		extraNodes := []waBinary.Node{{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag:   "interactive",
-				Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
-				Content: []waBinary.Node{{
-					Tag:   "native_flow",
-					Attrs: waBinary.Attrs{"v": "9", "name": "mixed"},
-				}},
-			}},
-		}}
-
-		// --- Envio Final ---
-		resp, err := client.SendMessage(context.Background(), recipient, finalMsg,
-			whatsmeow.SendRequestExtra{
-				ID:              msgid,
-				AdditionalNodes: &extraNodes,
-			},
-		)
-
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
-			return
-		}
-
-		// --- Histórico e Eventos ---
-		historyStr := r.Context().Value("userinfo").(Values).Get("History")
-		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "buttons", body, "", historyLimit)
-
-		token := r.Context().Value("userinfo").(Values).Get("Token")
-		s.publishSentMessageEvent(token, txtid, txtid, recipient, msgid, finalMsg, resp.Timestamp)
-
-		// --- Resposta HTTP ---
-		responseJSON, _ := json.Marshal(map[string]interface{}{
-			"Details":   "Sent",
-			"Timestamp": resp.Timestamp.Unix(),
-			"Id":        msgid,
-		})
-		s.Respond(w, r, http.StatusOK, string(responseJSON))
-	}
-}
-
-// SendList
-func (s *server) SendList() http.HandlerFunc {
-
-	// ── Input structs ────────────────────────────────────────────────────────
-
-	type listItem struct {
-		Title       string `json:"title"`
-		Description string `json:"desc"`
-		// ID fallback chain: RowId → RowID → rowId → rowID → title
-		RowId  string `json:"RowId"`
-		RowID  string `json:"RowID"`
-		Rowid  string `json:"rowId"`
-		Rowid2 string `json:"rowID"`
-	}
-
-	type section struct {
-		Title string     `json:"title"`
-		Rows  []listItem `json:"rows"`
-	}
-
-	type listRequest struct {
-		Phone      string     `json:"Phone"`
-		ButtonText string     `json:"ButtonText"` // Label on the "open list" button (default: "Select")
-		Desc       string     `json:"Desc"`       // Main body text. Fallback: Body, body, text
-		Body       string     `json:"Body"`
-		Body2      string     `json:"body"`
-		Text       string     `json:"text"`
-		TopText    string     `json:"TopText"`    // Optional header title
-		FooterText string     `json:"FooterText"` // Optional footer (optional)
-		Sections   []section  `json:"Sections"`   // Preferred: multi-section
-		List       []listItem `json:"List"`       // Legacy: flat list (wrapped in single section)
-		Id         string     `json:"Id"`         // Optional custom message ID
-
-		ContextInfo   waE2E.ContextInfo `json:"ContextInfo"`
-		QuotedMessage *waE2E.Message    `json:"QuotedMessage,omitempty"`
-	}
-
-	// ── Handler ──────────────────────────────────────────────────────────────
-
-	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -2217,130 +1941,187 @@ func (s *server) SendList() http.HandlerFunc {
 			return
 		}
 
-		// ── 1. Decode ────────────────────────────────────────────────────────
+		msgid := ""
+		var resp whatsmeow.SendResponse
 
-		var req listRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		var t textStruct
+		err := decoder.Decode(&t)
+		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
 
-		// Resolve body with fallbacks
-		body := strings.TrimSpace(req.Desc)
-		if body == "" {
-			body = strings.TrimSpace(req.Body)
-		}
-		if body == "" {
-			body = strings.TrimSpace(req.Body2)
-		}
-		if body == "" {
-			body = strings.TrimSpace(req.Text)
-		}
-
-		// ── 2. Validation ────────────────────────────────────────────────────
-
-		if req.Phone == "" {
+		if t.Phone == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
 			return
 		}
-		if body == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Desc/Body in Payload"))
-			return
-		}
-		if len(req.Sections) == 0 && len(req.List) == 0 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Sections (or List) in Payload"))
+
+		if t.Title == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
 			return
 		}
 
-		// ── 3. Build proto sections ──────────────────────────────────────────
-
-		// resolveRowID picks the first non-empty value from the ID fallback chain.
-		resolveRowID := func(item listItem) string {
-			for _, v := range []string{item.RowId, item.RowID, item.Rowid, item.Rowid2} {
-				if strings.TrimSpace(v) != "" {
-					return strings.TrimSpace(v)
-				}
-			}
-			return strings.TrimSpace(item.Title) // last resort: use title
+		if len(t.Buttons) < 1 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
+			return
+		}
+		if len(t.Buttons) > 3 {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
+			return
 		}
 
-		var protoSections []*waE2E.ListMessage_Section
+		recipient, ok := parseJID(t.Phone)
+		if !ok {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
+			return
+		}
 
+		if t.Id == "" {
+			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		var buttons []*waE2E.ButtonsMessage_Button
+
+		for _, item := range t.Buttons {
+			buttons = append(buttons, &waE2E.ButtonsMessage_Button{
+				ButtonID:       proto.String(item.ButtonId),
+				ButtonText:     &waE2E.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(item.ButtonText)},
+				Type:           waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
+				NativeFlowInfo: &waE2E.ButtonsMessage_Button_NativeFlowInfo{},
+			})
+		}
+
+		msg2 := &waE2E.ButtonsMessage{
+			ContentText: proto.String(t.Title),
+			HeaderType:  waE2E.ButtonsMessage_EMPTY.Enum(),
+			Buttons:     buttons,
+		}
+
+		msg := &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				ButtonsMessage: msg2,
+			},
+		}}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			return
+		}
+
+		// Publish sent message event to RabbitMQ
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+		return
+	}
+}
+
+// SendList
+func (s *server) SendList() http.HandlerFunc {
+	type listItem struct {
+		Title string `json:"title"`
+		Desc  string `json:"desc"`
+		RowId string `json:"RowId"`
+	}
+	type section struct {
+		Title string     `json:"title"`
+		Rows  []listItem `json:"rows"`
+	}
+	type listRequest struct {
+		Phone      string     `json:"Phone"`
+		ButtonText string     `json:"ButtonText"`
+		Desc       string     `json:"Desc"`
+		TopText    string     `json:"TopText"`
+		Sections   []section  `json:"Sections"`
+		List       []listItem `json:"List"` // compatibility
+		FooterText string     `json:"FooterText"`
+		Id         string     `json:"Id,omitempty"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		if clientManager.GetWhatsmeowClient(txtid) == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		var req listRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+
+		// Required fields validation - FooterText is optional
+		if req.Phone == "" || req.ButtonText == "" || req.Desc == "" || req.TopText == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing required fields: Phone, ButtonText, Desc, TopText"))
+			return
+		}
+
+		// Priority for Sections, but accepts List for compatibility
+		var sections []*waE2E.ListMessage_Section
 		if len(req.Sections) > 0 {
-			// Multi-section mode (preferred)
 			for _, sec := range req.Sections {
 				var rows []*waE2E.ListMessage_Row
 				for _, item := range sec.Rows {
-					rowTitle := strings.TrimSpace(item.Title)
-					if rowTitle == "" {
-						continue
+					rowId := item.RowId
+					if rowId == "" {
+						rowId = item.Title // fallback
 					}
-					rowID := resolveRowID(item)
-					if rowID == "" {
-						rowID = rowTitle
-					}
-					row := &waE2E.ListMessage_Row{
-						RowID: proto.String(rowID),
-						Title: proto.String(rowTitle),
-					}
-					if desc := strings.TrimSpace(item.Description); desc != "" {
-						row.Description = proto.String(desc)
-					}
-					rows = append(rows, row)
+					rows = append(rows, &waE2E.ListMessage_Row{
+						RowID:       proto.String(rowId),
+						Title:       proto.String(item.Title),
+						Description: proto.String(item.Desc),
+					})
 				}
-				if len(rows) == 0 {
-					continue
-				}
-				sec2 := &waE2E.ListMessage_Section{Rows: rows}
-				if t := strings.TrimSpace(sec.Title); t != "" {
-					sec2.Title = proto.String(t)
-				}
-				protoSections = append(protoSections, sec2)
-			}
-		} else {
-			// Legacy flat-list mode: wrap all items in a single section
-			sectionTitle := strings.TrimSpace(req.TopText)
-			if sectionTitle == "" {
-				sectionTitle = "Menu"
-			}
-			var rows []*waE2E.ListMessage_Row
-			for _, item := range req.List {
-				rowTitle := strings.TrimSpace(item.Title)
-				if rowTitle == "" {
-					continue
-				}
-				rowID := resolveRowID(item)
-				if rowID == "" {
-					rowID = rowTitle
-				}
-				row := &waE2E.ListMessage_Row{
-					RowID: proto.String(rowID),
-					Title: proto.String(rowTitle),
-				}
-				if desc := strings.TrimSpace(item.Description); desc != "" {
-					row.Description = proto.String(desc)
-				}
-				rows = append(rows, row)
-			}
-			if len(rows) > 0 {
-				protoSections = append(protoSections, &waE2E.ListMessage_Section{
-					Title: proto.String(sectionTitle),
+				sections = append(sections, &waE2E.ListMessage_Section{
+					Title: proto.String(sec.Title),
 					Rows:  rows,
 				})
 			}
-		}
+		} else if len(req.List) > 0 {
+			var rows []*waE2E.ListMessage_Row
+			for _, item := range req.List {
+				rowId := item.RowId
+				if rowId == "" {
+					rowId = item.Title // fallback
+				}
+				rows = append(rows, &waE2E.ListMessage_Row{
+					RowID:       proto.String(rowId),
+					Title:       proto.String(item.Title),
+					Description: proto.String(item.Desc),
+				})
+			}
 
-		if len(protoSections) == 0 {
-			s.Respond(w, r, http.StatusBadRequest,
-				errors.New("no valid sections/rows found in Payload"))
+			// Debug: dynamic title: uses TopText if it exists, otherwise 'Menu'
+			sectionTitle := req.TopText
+			if sectionTitle == "" {
+				sectionTitle = "Menu"
+			}
+			sections = append(sections, &waE2E.ListMessage_Section{
+				Title: proto.String(sectionTitle),
+				Rows:  rows,
+			})
+		} else {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("no section or list provided"))
 			return
 		}
 
-		// ── 4. Validate recipient ────────────────────────────────────────────
-
-		recipient, err := validateMessageFields(req.Phone, req.ContextInfo.StanzaID, req.ContextInfo.Participant)
-		if err != nil {
-			s.Respond(w, r, http.StatusBadRequest, err)
+		recipient, ok := parseJID(req.Phone)
+		if !ok {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
 			return
 		}
 
@@ -2349,116 +2130,57 @@ func (s *server) SendList() http.HandlerFunc {
 			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
 		}
 
-		// ── 5. Build ListMessage protobuf ────────────────────────────────────
-
-		buttonText := strings.TrimSpace(req.ButtonText)
-		if buttonText == "" {
-			buttonText = "Select"
-		}
-
+		// Create the message with ListMessage
 		listMsg := &waE2E.ListMessage{
-			Description: proto.String(body),
-			ButtonText:  proto.String(buttonText),
-			ListType:    waE2E.ListMessage_SINGLE_SELECT.Enum(), // always SINGLE_SELECT
-			Sections:    protoSections,
+			Title:       proto.String(req.TopText),
+			Description: proto.String(req.Desc),
+			ButtonText:  proto.String(req.ButtonText),
+			ListType:    waE2E.ListMessage_SINGLE_SELECT.Enum(),
+			Sections:    sections,
 		}
 
-		if t := strings.TrimSpace(req.TopText); t != "" {
-			listMsg.Title = proto.String(t)
-		}
-		if t := strings.TrimSpace(req.FooterText); t != "" {
-			listMsg.FooterText = proto.String(t)
+		// Add footer only if provided
+		if req.FooterText != "" {
+			listMsg.FooterText = proto.String(req.FooterText)
 		}
 
-		// ContextInfo / reply / mentions / forward
-		if req.ContextInfo.StanzaID != nil {
-			qm := req.QuotedMessage
-			if qm == nil {
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-			listMsg.ContextInfo = &waE2E.ContextInfo{
-				StanzaID:      proto.String(*req.ContextInfo.StanzaID),
-				Participant:   proto.String(*req.ContextInfo.Participant),
-				QuotedMessage: qm,
-			}
-		}
-		if req.ContextInfo.MentionedJID != nil {
-			if listMsg.ContextInfo == nil {
-				listMsg.ContextInfo = &waE2E.ContextInfo{}
-			}
-			listMsg.ContextInfo.MentionedJID = req.ContextInfo.MentionedJID
-		}
-		if req.ContextInfo.IsForwarded != nil && *req.ContextInfo.IsForwarded {
-			if listMsg.ContextInfo == nil {
-				listMsg.ContextInfo = &waE2E.ContextInfo{}
-			}
-			listMsg.ContextInfo.IsForwarded = proto.Bool(true)
-		}
-
-		// ── 6. Wrap in DocumentWithCaptionMessage > FutureProofMessage ───────
-		//
-		// WRONG (old):  ViewOnceMessage > FutureProofMessage > ListMessage
-		// CORRECT:      DocumentWithCaptionMessage > FutureProofMessage > ListMessage
-		//
-		// Without the correct wrapper the list message does not render on the
-		// recipient's device and arrives as plain text or is silently dropped.
-
-		finalMsg := &waE2E.Message{
-			DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
-				Message: &waE2E.Message{ListMessage: listMsg},
+		// Try with ViewOnceMessage wrapper as some users report this helps with error 405
+		msg := &waE2E.Message{
+			ViewOnceMessage: &waE2E.FutureProofMessage{
+				Message: &waE2E.Message{
+					ListMessage: listMsg,
+				},
 			},
 		}
-
-		// ── 7. Extra binary nodes ────────────────────────────────────────────
-		//
-		// Lists require: biz > list(type="product_list", v="2")
-		// Without this node the WhatsApp server does not process the message
-		// as an interactive list.
-
-		extraNodes := []waBinary.Node{{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag: "list",
-				Attrs: waBinary.Attrs{
-					"type": "product_list",
-					"v":    "2",
-				},
-			}},
-		}}
-
-		// ── 8. Send ──────────────────────────────────────────────────────────
 
 		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(
-			context.Background(), recipient, finalMsg,
-			whatsmeow.SendRequestExtra{
-				ID:              msgid,
-				AdditionalNodes: &extraNodes,
-			},
+			context.Background(),
+			recipient,
+			msg,
+			whatsmeow.SendRequestExtra{ID: msgid},
 		)
 		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError,
-				fmt.Errorf("error sending message: %v", err))
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
 		}
 
-		// ── 9. History & events ──────────────────────────────────────────────
-
-		historyStr := r.Context().Value("userinfo").(Values).Get("History")
-		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "list", body, "", historyLimit)
-
+		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
-		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, finalMsg, resp.Timestamp)
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
-		// ── 10. Response ─────────────────────────────────────────────────────
-
-		responseJSON, _ := json.Marshal(map[string]interface{}{
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message list sent")
+		response := map[string]interface{}{
 			"Details":   "Sent",
-			"Timestamp": resp.Timestamp.Unix(),
+			"Timestamp": resp.Timestamp,
 			"Id":        msgid,
-		})
-		s.Respond(w, r, http.StatusOK, string(responseJSON))
+		}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
 	}
 }
 
@@ -2525,6 +2247,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		ContextInfo   waE2E.ContextInfo
 		QuotedText    string         `json:"QuotedText,omitempty"`
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		AI            bool           `json:"AI,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -2617,7 +2340,15 @@ func (s *server) SendMessage() http.HandlerFunc {
 			}
 			msg.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		var additionalNodes []waBinary.Node
+		if t.AI {
+			additionalNodes = append(additionalNodes, waBinary.Node{Tag: "bot", Attrs: waBinary.Attrs{"biz_bot": "1"}})
+		}
+		extra := whatsmeow.SendRequestExtra{ID: msgid}
+		if t.AI {
+			extra.AdditionalNodes = &additionalNodes
+		}
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, extra)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
@@ -2633,6 +2364,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
