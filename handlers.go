@@ -810,7 +810,7 @@ func (s *server) GetStatus() http.HandlerFunc {
 	}
 }
 
-// Sends a document/attachment message
+// Sends a document/attachment message 
 func (s *server) SendDocument() http.HandlerFunc {
 
 	type documentStruct struct {
@@ -822,6 +822,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 		MimeType      string
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -943,6 +944,13 @@ func (s *server) SendDocument() http.HandlerFunc {
 			msg.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+		if t.Expiration > 0 {
+		  if msg.DocumentMessage.ContextInfo == nil {
+				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.DocumentMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+		}
+
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
@@ -970,7 +978,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 	}
 }
 
-// Sends an audio message
+// Sends an audio message 
 func (s *server) SendAudio() http.HandlerFunc {
 
 	type audioStruct struct {
@@ -984,6 +992,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 		Waveform      []byte
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1114,6 +1123,13 @@ func (s *server) SendAudio() http.HandlerFunc {
 			msg.AudioMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+		if t.Expiration > 0 {
+		  if msg.AudioMessage.ContextInfo == nil {
+				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.AudioMessage.ContextInfo.Expiration =  proto.Uint32(t.Expiration)
+		}
+
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
@@ -1152,6 +1168,7 @@ func (s *server) SendImage() http.HandlerFunc {
 		MimeType      string
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1316,6 +1333,12 @@ func (s *server) SendImage() http.HandlerFunc {
 			}
 			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
+		if t.Expiration > 0 {
+		  if msg.ImageMessage.ContextInfo == nil {
+				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.ImageMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
@@ -1344,7 +1367,7 @@ func (s *server) SendImage() http.HandlerFunc {
 	}
 }
 
-// Sends Sticker message
+// Sends Sticker message 
 func (s *server) SendSticker() http.HandlerFunc {
 
 	type stickerStruct struct {
@@ -1359,6 +1382,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 		Emojis        []string
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1471,6 +1495,13 @@ func (s *server) SendSticker() http.HandlerFunc {
 			msg.StickerMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+		if t.Expiration > 0 {
+		  if msg.StickerMessage.ContextInfo == nil {
+				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.StickerMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+		}
+
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
@@ -1510,6 +1541,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 		MimeType      string
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1645,6 +1677,13 @@ func (s *server) SendVideo() http.HandlerFunc {
 			msg.VideoMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+		if t.Expiration > 0 {
+		  if msg.VideoMessage.ContextInfo == nil {
+				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.VideoMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+		}
+
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
@@ -1682,6 +1721,7 @@ func (s *server) SendContact() http.HandlerFunc {
 		Vcard         string
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1767,6 +1807,13 @@ func (s *server) SendContact() http.HandlerFunc {
 			msg.ContactMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+		if t.Expiration > 0 {
+		  if msg.ContactMessage.ContextInfo == nil {
+				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.ContactMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+		}
+
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
@@ -1805,6 +1852,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 		Longitude     float64
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1889,6 +1937,13 @@ func (s *server) SendLocation() http.HandlerFunc {
 				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 			msg.LocationMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		}
+
+		if t.Expiration > 0 {
+		  if msg.LocationMessage.ContextInfo == nil {
+				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.LocationMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -2237,7 +2292,7 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 	}
 }
 
-// Sends a regular text message
+// Sends a regular text message 
 func (s *server) SendMessage() http.HandlerFunc {
 	type textStruct struct {
 		Phone         string
@@ -2247,6 +2302,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		ContextInfo   waE2E.ContextInfo
 		QuotedText    string         `json:"QuotedText,omitempty"`
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Expiration    uint32         `json:"Expiration,omitempty"`
 		AI            bool           `json:"AI,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -2339,6 +2395,12 @@ func (s *server) SendMessage() http.HandlerFunc {
 				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 			msg.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		}
+		if t.Expiration > 0 {
+		  if msg.ExtendedTextMessage.ContextInfo == nil {
+				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+		  msg.ExtendedTextMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
 		}
 		var additionalNodes []waBinary.Node
 		if t.AI {
