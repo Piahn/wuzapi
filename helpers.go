@@ -46,6 +46,7 @@ const (
 	openGraphFetchTimeout    = 5 * time.Second
 	openGraphPageMaxBytes    = 2 * 1024 * 1024  // 2MB
 	openGraphImageMaxBytes   = 10 * 1024 * 1024 // 10MB
+        openGraphVideoMaxBytes   = 400 * 1024 * 1024 //400MB
 	openGraphThumbnailWidth  = 100
 	openGraphThumbnailHeight = 100
 	openGraphJpegQuality     = 80

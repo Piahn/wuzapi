@@ -26,6 +26,7 @@ import (
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/store"
+        waProto "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -144,6 +145,29 @@ func updateAndGetUserSubscriptions(mycli *MyClient) ([]string, error) {
 
 	return subscribedEvents, nil
 }
+
+// Jadikan sebagai method milik MyClient
+func (m *MyClient) resolveLIDtoJID(groupJID types.JID, targetJID types.JID) string {
+	// Kalau dari awal bukan LID, langsung balikin
+	if targetJID.Server != "lid" {
+		return targetJID.String()
+	}
+
+	// Langsung panggil m.WAClient! Gak perlu manggil variabel dari luar
+	info, err := m.WAClient.GetGroupInfo(context.Background(), groupJID)
+	if err == nil {
+		for _, p := range info.Participants {
+			if p.LID.User == targetJID.User {
+				if !p.JID.IsEmpty() {
+					return p.JID.String()
+				}
+			}
+		}
+	}
+
+	return targetJID.String()
+}
+
 
 func getUserWebhookUrl(token string) string {
 	webhookurl := ""
@@ -504,7 +528,8 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 			myuserinfo, found := userinfocache.Get(token)
 
 			for evt := range qrChan {
-				if evt.Event == "code" {
+				switch evt.Event {
+				case "code":
 					// Display QR code in terminal (useful for testing/developing)
 					// Skip in stdio mode to avoid breaking JSON-RPC
 					if *logType != "json" && s.mode != Stdio {
@@ -534,7 +559,7 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 
 					sendEventWithWebHook(&mycli, postmap, "")
 
-				} else if evt.Event == "timeout" {
+				case "timeout":
 					// Clear QR code from DB on timeout
 					// Send webhook notifying QR timeout before cleanup
 					postmap := make(map[string]interface{})
@@ -560,7 +585,8 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 					case killchannel[userID] <- true:
 					default:
 					}
-				} else if evt.Event == "success" {
+
+				case "success":
 					log.Info().Msg("QR pairing ok!")
 					// Clear QR code after pairing
 					sqlStmt := `UPDATE users SET qrcode='', connected=1 WHERE id=$1`
@@ -573,7 +599,8 @@ func (s *server) startClient(userID string, textjid string, token string, subscr
 							userinfocache.Set(token, v, cache.NoExpiration)
 						}
 					}
-				} else {
+
+				default:
 					log.Info().Str("event", evt.Event).Msg("Login event")
 				}
 			}
@@ -681,6 +708,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	postmap["event"] = rawEvt
 	dowebhook := 0
 	path := ""
+        log.Info().Msgf("🔥 TIPE EVENT YANG MASUK: %T", rawEvt)
 
 	switch evt := rawEvt.(type) {
 	case *events.AppStateSyncComplete:
@@ -848,6 +876,223 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		postmap["type"] = "Message"
 		dowebhook = 1
+
+// Helper: resolve LID ↔ JID dua arah
+resolveLIDtoJID := func(jidStr string) string {
+    parsed, err := types.ParseJID(jidStr)
+    if err != nil {
+        return jidStr
+    }
+    // Jika bukan LID, kembalikan apa adanya
+    if parsed.Server != types.HiddenUserServer {
+        return jidStr
+    }
+    // LID → phone JID via LIDStore
+    phoneJID, err := mycli.WAClient.Store.LIDs.GetPNForLID(context.Background(), parsed)
+    if err != nil || phoneJID.IsEmpty() {
+        return jidStr // tidak ditemukan, kembalikan LID asli
+    }
+    return phoneJID.String()
+}
+
+resolveJIDtoLID := func(jidStr string) string {
+    parsed, err := types.ParseJID(jidStr)
+    if err != nil {
+        return ""
+    }
+    // Jika sudah LID, kembalikan apa adanya
+    if parsed.Server == types.HiddenUserServer {
+        return jidStr
+    }
+    // phone JID → LID via LIDStore
+    lid, err := mycli.WAClient.Store.LIDs.GetLIDForPN(context.Background(), parsed)
+    if err != nil || lid.IsEmpty() {
+        return ""
+    }
+    return lid.String()
+}
+
+// Ambil ContextInfo dari semua tipe pesan
+var ctxInfo *waProto.ContextInfo
+switch {
+case evt.Message.GetExtendedTextMessage() != nil:
+    ctxInfo = evt.Message.GetExtendedTextMessage().ContextInfo
+case evt.Message.GetImageMessage() != nil:
+    ctxInfo = evt.Message.GetImageMessage().ContextInfo
+case evt.Message.GetVideoMessage() != nil:
+    ctxInfo = evt.Message.GetVideoMessage().ContextInfo
+case evt.Message.GetAudioMessage() != nil:
+    ctxInfo = evt.Message.GetAudioMessage().ContextInfo
+case evt.Message.GetDocumentMessage() != nil:
+    ctxInfo = evt.Message.GetDocumentMessage().ContextInfo
+case evt.Message.GetStickerMessage() != nil:
+    ctxInfo = evt.Message.GetStickerMessage().ContextInfo
+case evt.Message.GetButtonsMessage() != nil:
+    ctxInfo = evt.Message.GetButtonsMessage().ContextInfo
+case evt.Message.GetListMessage() != nil:
+    ctxInfo = evt.Message.GetListMessage().ContextInfo
+}
+
+if ctxInfo != nil {
+    // --- Quoted Sender: resolve LID → JID, replace langsung di Participant ---
+    if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
+        original := *ctxInfo.Participant
+        parsed, err := types.ParseJID(original)
+        if err == nil && parsed.Server == types.HiddenUserServer {
+            // Ini adalah LID, resolve ke JID
+            resolved := resolveLIDtoJID(original)
+            ctxInfo.Participant = &resolved
+        } else if err == nil && parsed.Server != types.HiddenUserServer {
+            // Ini adalah JID, tambahkan LID-nya jika ada
+            lid := resolveJIDtoLID(original)
+            if lid != "" {
+                // Simpan LID di QuotedStickerUrl (field string spare yg jarang dipakai)
+                // ATAU inject ke MentionedJid — tapi cara terbaik: ganti Participant ke JID,
+                // dan tambahkan LID via field lain. Di sini kita cukup pastikan JID tersedia.
+                _ = lid
+            }
+        }
+    }
+
+    // --- MentionedJID: resolve LID → JID dan replace langsung ---
+    if len(ctxInfo.MentionedJID) > 0 {
+        // Buat slice baru untuk menampung hasil yang sudah bersih
+        var newMentions []string
+
+        for _, jidStr := range ctxInfo.MentionedJID {
+            parsed, err := types.ParseJID(jidStr)
+            if err != nil {
+                // Jika gagal parse, masukkan saja apa adanya biar tidak hilang
+                newMentions = append(newMentions, jidStr)
+                continue
+            }
+
+            if parsed.Server == types.HiddenUserServer {
+                // Jika LID → resolve ke JID lalu masukkan
+                // (Jika gagal resolve, fungsi resolveLIDtoJID sudah otomatis mengembalikan LID aslinya)
+                resolved := resolveLIDtoJID(jidStr)
+                newMentions = append(newMentions, resolved)
+            } else {
+                // Jika sudah JID biasa → langsung masukkan saja tanpa mencari LID-nya
+                newMentions = append(newMentions, jidStr)
+            }
+        }
+
+        // Timpa array aslinya dengan array yang baru
+        ctxInfo.MentionedJID = newMentions
+    }
+}
+
+/*
+    // --- MentionedJID: resolve LID → JID dan append JID ke slice ---
+    if len(ctxInfo.MentionedJID) > 0 {
+        original := make([]string, len(ctxInfo.MentionedJID))
+        copy(original, ctxInfo.MentionedJID)
+
+        for _, jidStr := range original {
+            parsed, err := types.ParseJID(jidStr)
+            if err != nil {
+                continue
+            }
+            if parsed.Server == types.HiddenUserServer {
+                // LID → resolve ke JID lalu append
+                resolved := resolveLIDtoJID(jidStr)
+                if resolved != jidStr {
+                    ctxInfo.MentionedJID = append(ctxInfo.MentionedJID, resolved)
+                }
+            } else {
+                // JID → resolve ke LID lalu append
+                lid := resolveJIDtoLID(jidStr)
+                if lid != "" {
+                    //ctxInfo.MentionedJID = append(ctxInfo.MentionedJID, lid)
+                }
+            }
+        }
+    }
+}
+*/
+
+/**
+    // ── RESOLVE LID → JID LANGSUNG KE evt.Message ────────────────────────
+
+    // Helper: resolve LID JID ke phone-based JID via contact store
+    resolveLIDtoJID := func(jidStr string) string {
+        parsed, err := types.ParseJID(jidStr)
+        if err != nil {
+            return jidStr
+        }
+        // Bukan LID, kembalikan apa adanya
+        if parsed.Server != types.HiddenUserServer {
+            return jidStr
+        }
+
+        // Coba lookup langsung via store (whatsmeow versi baru)
+        contact, err := mycli.WAClient.Store.Contacts.GetContact(context.Background(), parsed)
+        if err == nil && contact.JID.User != "" {
+            return contact.JID.String()
+        }
+
+        // Fallback: scan semua kontak cari LID yang cocok
+        allContacts, err := mycli.WAClient.Store.Contacts.GetAllContacts(context.Background())
+        if err == nil {
+            for phoneJID, info := range allContacts {
+                if info.LID.User != "" && info.LID.User == parsed.User {
+                    return phoneJID.String()
+                }
+            }
+        }
+
+        return jidStr // tidak ditemukan, kembalikan LID asli
+    }
+
+    // Ambil ContextInfo dari tipe pesan apapun
+    var ctxInfo *waProto.ContextInfo
+    switch {
+    case evt.Message.GetExtendedTextMessage() != nil:
+        ctxInfo = evt.Message.GetExtendedTextMessage().ContextInfo
+    case evt.Message.GetImageMessage() != nil:
+        ctxInfo = evt.Message.GetImageMessage().ContextInfo
+    case evt.Message.GetVideoMessage() != nil:
+        ctxInfo = evt.Message.GetVideoMessage().ContextInfo
+    case evt.Message.GetAudioMessage() != nil:
+        ctxInfo = evt.Message.GetAudioMessage().ContextInfo
+    case evt.Message.GetDocumentMessage() != nil:
+        ctxInfo = evt.Message.GetDocumentMessage().ContextInfo
+    case evt.Message.GetStickerMessage() != nil:
+        ctxInfo = evt.Message.GetStickerMessage().ContextInfo
+    case evt.Message.GetButtonsMessage() != nil:
+        ctxInfo = evt.Message.GetButtonsMessage().ContextInfo
+    case evt.Message.GetListMessage() != nil:
+        ctxInfo = evt.Message.GetListMessage().ContextInfo
+    }
+
+    if ctxInfo != nil {
+        // --- Quoted Sender: resolve LID → JID, replace langsung di Participant ---
+        if ctxInfo.Participant != nil && *ctxInfo.Participant != "" {
+            resolved := resolveLIDtoJID(*ctxInfo.Participant)
+            ctxInfo.Participant = &resolved
+        }
+
+        // --- MentionedJID: tambahkan JID hasil resolve di samping LID yang sudah ada ---
+        if len(ctxInfo.MentionedJID) > 0 {
+            original := make([]string, len(ctxInfo.MentionedJID))
+            copy(original, ctxInfo.MentionedJID)
+
+            for _, jidStr := range original {
+                resolved := resolveLIDtoJID(jidStr)
+                // Hanya append jika berhasil di-resolve (berbeda dari aslinya)
+                if resolved != jidStr {
+                    ctxInfo.MentionedJID = append(ctxInfo.MentionedJID, resolved)
+                }
+            }
+        }
+    }
+
+    // ── AKHIR RESOLVE ────────────────────────────────────────────────────
+
+    // ... lanjut kode existing (download media, S3, dll) ...
+*/
+
 		metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
 		if evt.Info.Type != "" {
 			metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
@@ -1794,10 +2039,57 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["type"] = "MediaRetry"
 		dowebhook = 1
 		log.Info().Str("messageID", evt.MessageID).Msg("Media retry event")
-	case *events.GroupInfo:
+
+       	case *events.GroupInfo:
 		postmap["type"] = "GroupInfo"
-		dowebhook = 1
-		log.Info().Str("jid", evt.JID.String()).Msg("Group info updated")
+		var action string
+		var members []string
+
+		if len(evt.Join) > 0 {
+			//log.Info().Msg("2. 🔍 DETEKSI: ADA MEMBER MASUK (JOIN)")
+			action = "join"
+			for _, p := range evt.Join {
+				members = append(members, p.String())
+			}
+		} else if len(evt.Leave) > 0 {
+			//log.Info().Msg("2. 🔍 DETEKSI: ADA MEMBER KELUAR (LEAVE)")
+			action = "leave"
+			for _, p := range evt.Leave {
+				members = append(members, p.String())
+			}
+		} else if len(evt.Promote) > 0 {
+			//log.Info().Msg("2. 🔍 DETEKSI: NAIK ADMIN (PROMOTE)")
+			action = "promote"
+			for _, p := range evt.Promote {
+				members = append(members, p.String())
+			}
+		} else if len(evt.Demote) > 0 {
+			//log.Info().Msg("2. 🔍 DETEKSI: TURUN ADMIN (DEMOTE)")
+			action = "demote"
+			for _, p := range evt.Demote {
+				members = append(members, p.String())
+			}
+		}
+
+		if action != "" {
+			//log.Info().Msg("3. 📦 MERAKIT PAYLOAD JSON")
+			postmap["action"] = action
+			postmap["participants"] = members
+
+			// Perlindungan Sender Null (Pointer Check)
+			if evt.Sender == nil {
+				//log.Info().Msg("4. 👤 SENDER KOSONG -> DI-SET JADI SYSTEM")
+				postmap["sender"] = "system"
+			} else {
+				//log.Info().Msg("4. 👤 SENDER ADA -> AMBIL NILAINYA")
+				postmap["sender"] = evt.Sender.String()
+			}
+
+			dowebhook = 1
+			log.Info().Str("action", action).Msg("Add New Membwr In Group")
+		} else {
+			log.Info().Msg("❌ INI BUKAN EVENT MEMBER (MUNGKIN GANTI NAMA/FOTO GRUP)")
+		}
 	case *events.JoinedGroup:
 		postmap["type"] = "JoinedGroup"
 		dowebhook = 1

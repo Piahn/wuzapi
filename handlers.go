@@ -810,7 +810,7 @@ func (s *server) GetStatus() http.HandlerFunc {
 	}
 }
 
-// Sends a document/attachment message 
+// Sends a document/attachment message
 func (s *server) SendDocument() http.HandlerFunc {
 
 	type documentStruct struct {
@@ -829,6 +829,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -949,6 +950,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 				msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.DocumentMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -964,10 +966,11 @@ func (s *server) SendDocument() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -978,7 +981,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 	}
 }
 
-// Sends an audio message 
+// Sends an audio message
 func (s *server) SendAudio() http.HandlerFunc {
 
 	type audioStruct struct {
@@ -999,6 +1002,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -1128,6 +1132,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 				msg.AudioMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.AudioMessage.ContextInfo.Expiration =  proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -1143,10 +1148,11 @@ func (s *server) SendAudio() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -1175,6 +1181,7 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -1338,6 +1345,7 @@ func (s *server) SendImage() http.HandlerFunc {
 				msg.ImageMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.ImageMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(t.Expiration)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -1353,10 +1361,11 @@ func (s *server) SendImage() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -1367,7 +1376,7 @@ func (s *server) SendImage() http.HandlerFunc {
 	}
 }
 
-// Sends Sticker message 
+// Sends Sticker message
 func (s *server) SendSticker() http.HandlerFunc {
 
 	type stickerStruct struct {
@@ -1383,12 +1392,14 @@ func (s *server) SendSticker() http.HandlerFunc {
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 		Expiration    uint32         `json:"Expiration,omitempty"`
+                IsStickerAi   *bool          `json:"IsStickerAi,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -1460,6 +1471,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(processedData))),
 			PngThumbnail:  t.PngThumbnail,
+                        IsAiSticker:   t.IsStickerAi,
 		}}
 
 		if t.ContextInfo.StanzaID != nil {
@@ -1495,11 +1507,16 @@ func (s *server) SendSticker() http.HandlerFunc {
 			msg.StickerMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
+//                if t.IsStickerAi != nil && *t.IsStickerAi {
+//                        msg.StickerMessage.IsAiSticker = proto.Bool(true)
+//                }
+
 		if t.Expiration > 0 {
 		  if msg.StickerMessage.ContextInfo == nil {
 				msg.StickerMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.StickerMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -1515,10 +1532,11 @@ func (s *server) SendSticker() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -1548,6 +1566,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
@@ -1599,7 +1618,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 			}
 		} else if isHTTPURL(t.Video) {
-			data, ct, err := fetchURLBytes(r.Context(), t.Video, openGraphImageMaxBytes)
+			data, ct, err := fetchURLBytes(r.Context(), t.Video, openGraphVideoMaxBytes)
 			if err != nil {
 				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("failed to fetch image from url: %v", err)))
 				return
@@ -1682,6 +1701,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.VideoMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -1697,10 +1717,11 @@ func (s *server) SendVideo() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -1711,22 +1732,37 @@ func (s *server) SendVideo() http.HandlerFunc {
 	}
 }
 
-// Sends Contact
+
+// Sends Contacts (Versi baru)
+// Sends Contact (1 or more contacts in a single message)
 func (s *server) SendContact() http.HandlerFunc {
 
+	// contactItem mewakili satu kontak dalam array
+	type contactItem struct {
+		Name  string `json:"Name"`
+		Vcard string `json:"Vcard"`
+	}
+
 	type contactStruct struct {
-		Phone         string
-		Id            string
-		Name          string
-		Vcard         string
+		Phone   string `json:"Phone"`
+		Id      string `json:"Id"`
+
+		// --- Format lama (single contact, backward compatible) ---
+		Name  string `json:"Name,omitempty"`
+		Vcard string `json:"Vcard,omitempty"`
+
+		// --- Format baru (multi contact) ---
+		Contacts []contactItem `json:"Contacts,omitempty"`
+
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
-		Expiration    uint32         `json:"Expiration,omitempty"`
+                Expiration    uint32         `json:"Expiration,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+                msgexp := proto.Uint32(0)
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
@@ -1743,17 +1779,34 @@ func (s *server) SendContact() http.HandlerFunc {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
 			return
 		}
+
+		// Validasi field wajib
 		if t.Phone == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
 			return
 		}
-		if t.Name == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Name in Payload"))
-			return
+
+		// --- Normalisasi: gabungkan format lama ke dalam slice Contacts ---
+		// Jika field Name & Vcard diisi tapi Contacts kosong → format lama (single contact)
+		if len(t.Contacts) == 0 {
+			if t.Name == "" || t.Vcard == "" {
+				s.Respond(w, r, http.StatusBadRequest, errors.New("provide either Contacts array or both Name and Vcard"))
+				return
+			}
+			// Konversi format lama ke format baru agar logika di bawah seragam
+			t.Contacts = []contactItem{{Name: t.Name, Vcard: t.Vcard}}
 		}
-		if t.Vcard == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Vcard in Payload"))
-			return
+
+		// Validasi setiap kontak dalam array
+		for i, c := range t.Contacts {
+			if c.Name == "" {
+				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("missing Name on contact index %d", i)))
+				return
+			}
+			if c.Vcard == "" {
+				s.Respond(w, r, http.StatusBadRequest, errors.New(fmt.Sprintf("missing Vcard on contact index %d", i)))
+				return
+			}
 		}
 
 		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
@@ -1769,52 +1822,91 @@ func (s *server) SendContact() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		msg := &waE2E.Message{ContactMessage: &waE2E.ContactMessage{
-			DisplayName: &t.Name,
-			Vcard:       &t.Vcard,
-		}}
+		// --- Bangun ContextInfo (quoted message, mention, forward) ---
+		buildContextInfo := func() *waE2E.ContextInfo {
+			var ci *waE2E.ContextInfo
 
-		if t.ContextInfo.StanzaID != nil {
-			var qm *waE2E.Message
-
-			// If QuotedMessage was provided, use it.
-			if t.QuotedMessage != nil {
-				qm = t.QuotedMessage
-			} else {
-				// Otherwise, it uses the old logic (empty message).
-				qm = &waE2E.Message{Conversation: proto.String("")}
-			}
-
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{
+			if t.ContextInfo.StanzaID != nil {
+				var qm *waE2E.Message
+				if t.QuotedMessage != nil {
+					qm = t.QuotedMessage
+				} else {
+					qm = &waE2E.Message{Conversation: proto.String("")}
+				}
+				ci = &waE2E.ContextInfo{
 					StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 					Participant:   proto.String(*t.ContextInfo.Participant),
 					QuotedMessage: qm,
 				}
 			}
-		}
-		if t.ContextInfo.MentionedJID != nil {
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
+
+			if t.ContextInfo.MentionedJID != nil {
+				if ci == nil {
+					ci = &waE2E.ContextInfo{}
+				}
+				ci.MentionedJID = t.ContextInfo.MentionedJID
 			}
-			msg.ContactMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+
+			if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
+				if ci == nil {
+					ci = &waE2E.ContextInfo{}
+				}
+				ci.IsForwarded = proto.Bool(true)
+			}
+                        if t.Expiration > 0 {
+				if ci == nil {
+					ci = &waE2E.ContextInfo{}
+				}
+				ci.Expiration = proto.Uint32(t.Expiration)
+                                msgexp = proto.Uint32(0)
+			}
+
+			return ci
 		}
 
-		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
-			if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
+		var msg *waE2E.Message
+
+		if len(t.Contacts) == 1 {
+			// ── Single contact: gunakan ContactMessage ──
+			c := t.Contacts[0]
+			contactMsg := &waE2E.ContactMessage{
+				DisplayName: proto.String(c.Name),
+				Vcard:       proto.String(c.Vcard),
 			}
-			msg.ContactMessage.ContextInfo.IsForwarded = proto.Bool(true)
+			if ci := buildContextInfo(); ci != nil {
+				contactMsg.ContextInfo = ci
+			}
+			msg = &waE2E.Message{ContactMessage: contactMsg}
+
+		} else {
+			// ── Multiple contacts: gunakan ContactsArrayMessage ──
+			var contactList []*waE2E.ContactMessage
+			for _, c := range t.Contacts {
+				contactList = append(contactList, &waE2E.ContactMessage{
+					DisplayName: proto.String(c.Name),
+					Vcard:       proto.String(c.Vcard),
+				})
+			}
+
+			// DisplayName untuk array biasanya jumlah kontaknya, e.g. "3 contacts"
+			arrayDisplayName := fmt.Sprintf("%d contacts", len(contactList))
+
+			contactsArrayMsg := &waE2E.ContactsArrayMessage{
+				DisplayName: proto.String(arrayDisplayName),
+				Contacts:    contactList,
+			}
+			if ci := buildContextInfo(); ci != nil {
+				contactsArrayMsg.ContextInfo = ci
+			}
+			msg = &waE2E.Message{ContactsArrayMessage: contactsArrayMsg}
 		}
 
-		if t.Expiration > 0 {
-		  if msg.ContactMessage.ContextInfo == nil {
-				msg.ContactMessage.ContextInfo = &waE2E.ContextInfo{}
-			}
-		  msg.ContactMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
-		}
-
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(
+			context.Background(),
+			recipient,
+			msg,
+			whatsmeow.SendRequestExtra{ID: msgid},
+		)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
@@ -1822,15 +1914,22 @@ func (s *server) SendContact() http.HandlerFunc {
 
 		historyStr := r.Context().Value("userinfo").(Values).Get("History")
 		historyLimit, _ := strconv.Atoi(historyStr)
-		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "contact", t.Name, "", historyLimit)
+
+		// Untuk history: simpan nama kontak pertama (atau gabungan jika banyak)
+		historyName := t.Contacts[0].Name
+		if len(t.Contacts) > 1 {
+			historyName = fmt.Sprintf("%s (+%d more)", historyName, len(t.Contacts)-1)
+		}
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "contact", historyName, "", historyLimit)
 
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
-		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Contact message sent")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -1858,6 +1957,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+                msgexp := proto.Uint32(0)
 
 		if clientManager.GetWhatsmeowClient(txtid) == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
@@ -1944,6 +2044,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 				msg.LocationMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.LocationMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 
 		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
@@ -1959,10 +2060,11 @@ func (s *server) SendLocation() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
@@ -2292,7 +2394,7 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 	}
 }
 
-// Sends a regular text message 
+// Sends a regular text message
 func (s *server) SendMessage() http.HandlerFunc {
 	type textStruct struct {
 		Phone         string
@@ -2312,6 +2414,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 		msgid := ""
+                msgexp := proto.Uint32(0)
 		var resp whatsmeow.SendResponse
 		decoder := json.NewDecoder(r.Body)
 		var t textStruct
@@ -2401,6 +2504,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
 			}
 		  msg.ExtendedTextMessage.ContextInfo.Expiration = proto.Uint32(t.Expiration)
+                  msgexp = proto.Uint32(0)
 		}
 		var additionalNodes []waBinary.Node
 		if t.AI {
@@ -2422,10 +2526,11 @@ func (s *server) SendMessage() http.HandlerFunc {
 		// Publish sent message event to RabbitMQ
 		token := r.Context().Value("userinfo").(Values).Get("Token")
 		userID := r.Context().Value("userinfo").(Values).Get("Id")
+                botJid := r.Context().Value("userinfo").(Values).Get("Jid")
 		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
 
 		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
-		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
 
 		responseJson, err := json.Marshal(response)
 		if err != nil {
@@ -3017,15 +3122,12 @@ func (s *server) CheckUser() http.HandlerFunc {
 	}
 }
 
+// Gets Users Info (nww)
 // Gets user information
 func (s *server) GetUser() http.HandlerFunc {
 
-	type checkUserStruct struct {
+	type userStruct struct {
 		Phone []string
-	}
-
-	type UserCollection struct {
-		Users map[types.JID]types.UserInfo
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -3038,7 +3140,7 @@ func (s *server) GetUser() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t checkUserStruct
+		var t userStruct
 		err := decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -3050,31 +3152,50 @@ func (s *server) GetUser() http.HandlerFunc {
 			return
 		}
 
-		var jids []types.JID
-		for _, arg := range t.Phone {
-			jid, err := types.ParseJID(arg)
-			if err != nil {
-				return
-			}
-			jids = append(jids, jid)
-		}
-		resp, err := clientManager.GetWhatsmeowClient(txtid).GetUserInfo(context.Background(), jids)
-
+		resp, err := clientManager.GetWhatsmeowClient(txtid).IsOnWhatsApp(context.Background(), t.Phone)
 		if err != nil {
-			msg := fmt.Sprintf("Failed to get user info: %v", err)
-			log.Error().Msg(msg)
-			s.Respond(w, r, http.StatusInternalServerError, msg)
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("%s", err)))
 			return
 		}
 
-		uc := new(UserCollection)
-		uc.Users = make(map[types.JID]types.UserInfo)
+		uis := make(map[string]interface{})
+		for _, item := range resp {
 
-		for jid, info := range resp {
-			uc.Users[jid] = info
+			// Ambil data kontak dari store (PushName, FullName, FirstName, BusinessName)
+			pushName := ""
+			fullName := ""
+			firstName := ""
+			businessName := ""
+
+			contact, err := clientManager.GetWhatsmeowClient(txtid).Store.Contacts.GetContact(context.Background(), item.JID)
+			if err == nil {
+				pushName = contact.PushName
+				fullName = contact.FullName
+				firstName = contact.FirstName
+				businessName = contact.BusinessName
+			}
+
+			// Fallback: kalau PushName kosong, coba pakai FullName atau FirstName
+			if pushName == "" {
+				if fullName != "" {
+					pushName = fullName
+				} else if firstName != "" {
+					pushName = firstName
+				}
+			}
+
+			uis[item.JID.String()] = map[string]interface{}{
+				"Found":        item.IsIn,
+				"JID":          item.JID.String(),
+				"PushName":     pushName,     // ← nama WA yang di-set user sendiri
+				"FullName":     fullName,     // ← dari phonebook device
+				"FirstName":    firstName,    // ← nama depan dari phonebook
+				"BusinessName": businessName, // ← nama bisnis (jika akun bisnis)
+			}
 		}
 
-		responseJson, err := json.Marshal(uc)
+		response := map[string]interface{}{"Users": uis}
+		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
 		} else {
