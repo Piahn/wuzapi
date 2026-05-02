@@ -1445,6 +1445,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			t.PackName,
 			t.PackPublisher,
 			t.Emojis,
+			t.IsStickerAi,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to process sticker data")

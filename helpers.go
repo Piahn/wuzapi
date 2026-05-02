@@ -805,7 +805,7 @@ func convertImageToWebP(input []byte) ([]byte, error) {
 	}, "ffmpeg failed converting image sticker")
 }
 
-func processStickerData(stickerData string, mimeOverride string, packID, packName, packPublisher string, emojis []string) ([]byte, string, error) {
+func processStickerData(stickerData string, mimeOverride string, packID, packName, packPublisher string, emojis []string, isStickerAi *bool) ([]byte, string, error) {
 	if !strings.HasPrefix(stickerData, "data") {
 		return nil, "", fmt.Errorf("data should start with \"data:mime/type;base64,\"")
 	}
@@ -821,7 +821,7 @@ func processStickerData(stickerData string, mimeOverride string, packID, packNam
 	}
 
 	if mimeType == "image/webp" {
-		filedata = embedStickerEXIF(filedata, packID, packName, packPublisher, emojis)
+		filedata = embedStickerEXIF(filedata, packID, packName, packPublisher, emojis, isStickerAi)
 	}
 
 	return filedata, mimeType, nil
@@ -853,8 +853,8 @@ func convertToWebPSticker(data []byte, mimeOverride string) ([]byte, string, err
 	}
 }
 
-func embedStickerEXIF(inputWebP []byte, packID, packName, packPublisher string, emojis []string) []byte {
-	meta := buildStickerMetadata(packID, packName, packPublisher, emojis)
+func embedStickerEXIF(inputWebP []byte, packID, packName, packPublisher string, emojis []string, isStickerAi *bool) []byte {
+	meta := buildStickerMetadata(packID, packName, packPublisher, emojis, isStickerAi)
 	if meta == nil {
 		return inputWebP
 	}
@@ -868,8 +868,8 @@ func embedStickerEXIF(inputWebP []byte, packID, packName, packPublisher string, 
 	return out
 }
 
-func buildStickerMetadata(packID, packName, packPublisher string, emojis []string) map[string]interface{} {
-	if packID == "" && packName == "" && packPublisher == "" && len(emojis) == 0 {
+func buildStickerMetadata(packID, packName, packPublisher string, emojis []string, isStickerAi *bool) map[string]interface{} {
+	if packID == "" && packName == "" && packPublisher == "" && len(emojis) == 0 && (isStickerAi == nil || !*isStickerAi) {
 		return nil
 	}
 
@@ -885,6 +885,9 @@ func buildStickerMetadata(packID, packName, packPublisher string, emojis []strin
 	}
 	if len(emojis) > 0 {
 		meta["emojis"] = emojis
+	}
+	if isStickerAi != nil && *isStickerAi {
+		meta["is-ai-sticker"] = 1
 	}
 	return meta
 }
