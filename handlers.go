@@ -4869,17 +4869,25 @@ func (s *server) ListNewsletter() http.HandlerFunc {
 // Admin List users
 func (s *server) ListUsers() http.HandlerFunc {
 	type usersStruct struct {
-		Id         string         `db:"id"`
-		Name       string         `db:"name"`
-		Token      string         `db:"token"`
-		Webhook    string         `db:"webhook"`
-		Jid        string         `db:"jid"`
-		Qrcode     string         `db:"qrcode"`
-		Connected  sql.NullBool   `db:"connected"`
-		Expiration sql.NullInt64  `db:"expiration"`
-		ProxyURL   sql.NullString `db:"proxy_url"`
-		Events     string         `db:"events"`
-		History    sql.NullInt64  `db:"history"`
+		Id              string         `db:"id"`
+		Name            string         `db:"name"`
+		Token           string         `db:"token"`
+		Webhook         string         `db:"webhook"`
+		Jid             string         `db:"jid"`
+		Qrcode          string         `db:"qrcode"`
+		Connected       sql.NullBool   `db:"connected"`
+		Expiration      sql.NullInt64  `db:"expiration"`
+		ProxyURL        sql.NullString `db:"proxy_url"`
+		Events          string         `db:"events"`
+		History         sql.NullInt64  `db:"history"`
+		S3Enabled       sql.NullBool   `db:"s3_enabled"`
+		S3Endpoint      sql.NullString `db:"s3_endpoint"`
+		S3Region        sql.NullString `db:"s3_region"`
+		S3Bucket        sql.NullString `db:"s3_bucket"`
+		S3PathStyle     sql.NullBool   `db:"s3_path_style"`
+		S3PublicURL     sql.NullString `db:"s3_public_url"`
+		MediaDelivery   sql.NullString `db:"media_delivery"`
+		S3RetentionDays sql.NullInt64  `db:"s3_retention_days"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -4890,11 +4898,11 @@ func (s *server) ListUsers() http.HandlerFunc {
 
 		if hasID {
 			// Fetch a single user
-			query = "SELECT id, name, token, webhook, jid, qrcode, connected, expiration, proxy_url, events, history FROM users WHERE id = $1"
+			query = "SELECT id, name, token, webhook, jid, qrcode, connected, expiration, proxy_url, events, history, s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_path_style, s3_public_url, media_delivery, s3_retention_days FROM users WHERE id = $1"
 			args = append(args, userID)
 		} else {
 			// Fetch all users
-			query = "SELECT id, name, token, webhook, jid, qrcode, connected, expiration, proxy_url, events, history FROM users"
+			query = "SELECT id, name, token, webhook, jid, qrcode, connected, expiration, proxy_url, events, history, s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_path_style, s3_public_url, media_delivery, s3_retention_days FROM users"
 		}
 
 		rows, err := s.db.Queryx(query, args...)
@@ -4943,38 +4951,17 @@ func (s *server) ListUsers() http.HandlerFunc {
 				"enabled":   proxyURL != "",
 				"proxy_url": proxyURL,
 			}
-			// Add s3_config (search S3 fields in the database)
-			var s3Enabled bool
-			var s3Endpoint, s3Region, s3Bucket, s3PublicURL, s3MediaDelivery string
-			var s3PathStyle bool
-			var s3RetentionDays int
-			// Start with safe defaults so the field is always present in the response
+			// Add s3_config (read from main query)
 			s3Config := map[string]interface{}{
-				"enabled":        false,
-				"endpoint":       "",
-				"region":         "",
-				"bucket":         "",
+				"enabled":        user.S3Enabled.Bool,
+				"endpoint":       user.S3Endpoint.String,
+				"region":         user.S3Region.String,
+				"bucket":         user.S3Bucket.String,
 				"access_key":     "***",
-				"path_style":     false,
-				"public_url":     "",
-				"media_delivery": "",
-				"retention_days": 0,
-			}
-			err = s.db.QueryRow(`SELECT COALESCE(s3_enabled, false), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''), COALESCE(s3_bucket, ''), COALESCE(s3_path_style, false), COALESCE(s3_public_url, ''), COALESCE(media_delivery, ''), COALESCE(s3_retention_days, 0) FROM users WHERE id = $1`, user.Id).Scan(&s3Enabled, &s3Endpoint, &s3Region, &s3Bucket, &s3PathStyle, &s3PublicURL, &s3MediaDelivery, &s3RetentionDays)
-			if err == nil {
-				// Overwrite defaults with actual values if the query succeeded
-				s3Config["enabled"] = s3Enabled
-				s3Config["endpoint"] = s3Endpoint
-				s3Config["region"] = s3Region
-				s3Config["bucket"] = s3Bucket
-				s3Config["path_style"] = s3PathStyle
-				s3Config["public_url"] = s3PublicURL
-				s3Config["media_delivery"] = s3MediaDelivery
-				s3Config["retention_days"] = s3RetentionDays
-			} else {
-				if err != sql.ErrNoRows {
-					log.Warn().Err(err).Str("user_id", user.Id).Msg("Failed to query S3 config for user")
-				}
+				"path_style":     user.S3PathStyle.Bool,
+				"public_url":     user.S3PublicURL.String,
+				"media_delivery": user.MediaDelivery.String,
+				"retention_days": user.S3RetentionDays.Int64,
 			}
 			userMap["s3_config"] = s3Config
 			users = append(users, userMap)
