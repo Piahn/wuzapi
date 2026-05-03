@@ -110,6 +110,7 @@ func (s *server) routes() {
 	s.router.Handle("/chat/send/document", c.Then(s.SendDocument())).Methods("POST")
 	//	s.router.Handle("/chat/send/template", c.Then(s.SendTemplate())).Methods("POST")
 	s.router.Handle("/chat/send/video", c.Then(s.SendVideo())).Methods("POST")
+	s.router.Handle("/chat/send/videostream", c.Then(s.SendVideoStream())).Methods("POST")
 	s.router.Handle("/chat/send/sticker", c.Then(s.SendSticker())).Methods("POST")
 	s.router.Handle("/chat/send/location", c.Then(s.SendLocation())).Methods("POST")
 	s.router.Handle("/chat/send/contact", c.Then(s.SendContact())).Methods("POST")

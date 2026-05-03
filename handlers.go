@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"image/jpeg"
 	"net/http"
 	"net/url"
@@ -1733,6 +1734,165 @@ func (s *server) SendVideo() http.HandlerFunc {
 	}
 }
 
+
+// SendVideoStream accepts multipart/form-data — streams video binary directly
+// to a temp file without base64 encoding overhead. Peak RAM: ~filesize (only
+// during whatsmeow.Upload). Transit buffer: 32KB regardless of file size.
+func (s *server) SendVideoStream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		msgexp := proto.Uint32(0)
+
+		if clientManager.GetWhatsmeowClient(txtid) == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		// Parse multipart form — max 32MB in memory, rest goes to disk
+		err := r.ParseMultipartForm(32 << 20)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("could not parse multipart form: %v", err))
+			return
+		}
+		defer r.MultipartForm.RemoveAll()
+
+		phone := r.FormValue("Phone")
+		caption := r.FormValue("Caption")
+		msgid := r.FormValue("Id")
+		mimeType := r.FormValue("MimeType")
+		stanzaID := r.FormValue("StanzaId")
+		participant := r.FormValue("Participant")
+		expirationStr := r.FormValue("Expiration")
+
+		if phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in form"))
+			return
+		}
+
+		// Get the video file from form
+		file, header, err := r.FormFile("Video")
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, fmt.Errorf("missing Video file in form: %v", err))
+			return
+		}
+		defer file.Close()
+
+		// Stream file to temp on disk (io.Copy uses 32KB buffer)
+		tmpFile, err := os.CreateTemp("", "wz_videostream_*.mp4")
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to create temp file: %v", err))
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath) // Always cleanup
+
+		written, err := io.Copy(tmpFile, file)
+		tmpFile.Close()
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to write temp file: %v", err))
+			return
+		}
+
+		log.Info().Int64("bytes", written).Str("filename", header.Filename).Msg("[VideoStream] Received file")
+
+		// Read temp file into []byte for whatsmeow.Upload (unavoidable)
+		filedata, err := os.ReadFile(tmpPath)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to read temp file: %v", err))
+			return
+		}
+
+		// Validate recipient (pass nil for empty StanzaId/Participant)
+		var pStanzaID, pParticipant *string
+		if stanzaID != "" {
+			pStanzaID = &stanzaID
+		}
+		if participant != "" {
+			pParticipant = &participant
+		}
+		recipient, err := validateMessageFields(phone, pStanzaID, pParticipant)
+		if err != nil {
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		if msgid == "" {
+			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+		}
+
+		// Upload to WhatsApp servers
+		uploaded, err := clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaVideo)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to upload file: %v", err))
+			return
+		}
+
+		// Detect MIME type
+		if mimeType == "" {
+			mimeType = http.DetectContentType(filedata)
+		}
+
+		msg := &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
+			Caption:       proto.String(caption),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      proto.String(mimeType),
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(filedata))),
+		}}
+
+		// Free filedata after building upload response (allow GC)
+		filedata = nil
+		runtime.GC()
+
+		// Handle ContextInfo (quoted message)
+		if stanzaID != "" {
+			msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{
+				StanzaID:      proto.String(stanzaID),
+				Participant:   proto.String(participant),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+			}
+		}
+
+		// Handle expiration
+		expiration, _ := strconv.ParseUint(expirationStr, 10, 32)
+		if expiration > 0 {
+			if msg.VideoMessage.ContextInfo == nil {
+				msg.VideoMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+			msg.VideoMessage.ContextInfo.Expiration = proto.Uint32(uint32(expiration))
+			msgexp = proto.Uint32(0)
+		}
+
+		resp, err := clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("error sending message: %v", err))
+			return
+		}
+
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "video", caption, "", historyLimit)
+
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		botJid := r.Context().Value("userinfo").(Values).Get("Jid")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Msg("[VideoStream] Message sent")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid, "Expiration": msgexp, "sender": botJid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+		return
+	}
+}
 
 // Sends Contacts (Versi baru)
 // Sends Contact (1 or more contacts in a single message)
