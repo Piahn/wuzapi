@@ -40,7 +40,77 @@ import (
 	"github.com/nfnt/resize"
 	"github.com/rs/zerolog/log"
 	"github.com/vincent-petithory/dataurl"
+	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+// encodeVarint encodes a uint64 as a protobuf varint.
+func encodeVarint(v uint64) []byte {
+	var buf [10]byte
+	n := 0
+	for v >= 0x80 {
+		buf[n] = byte(v&0x7f | 0x80)
+		v >>= 7
+		n++
+	}
+	buf[n] = byte(v)
+	return buf[:n+1]
+}
+
+// setVideoPTVideo sets the PTVideo flag on a VideoMessage.
+// Strategy:
+//  1. Try proto reflection by name (handles all whatsmeow versions where the field is exposed).
+//  2. Scan all bool fields looking for any field whose name contains "pt" (catches renamed fields).
+//  3. Inject raw protobuf bytes as unknown field 26 — the field number used by WhatsApp's
+//     current E2E proto for PTVideo. Unknown fields are preserved on re-serialisation so
+//     WhatsApp will still decode them correctly.
+// convertToPTVMessage converts a standard video message into a Play-To-View (PTV) message.
+// WhatsApp treats PTVs as a completely different message type in the root Message proto
+// (field 43: ptvMessage) rather than a flag inside VideoMessage.
+func convertToPTVMessage(msg *waE2E.Message) {
+	if msg == nil || msg.VideoMessage == nil {
+		return
+	}
+
+	vidMsg := msg.VideoMessage
+	
+	// PTV requirements: force mp4 and no caption
+	vidMsg.Mimetype = proto.String("video/mp4")
+	vidMsg.Caption = nil
+
+	ref := msg.ProtoReflect()
+	desc := ref.Descriptor()
+
+	// 1. Try reflection by name (PtvMessage or PTVMessage)
+	for _, name := range []protoreflect.Name{"PtvMessage", "PTVMessage", "ptvMessage"} {
+		fd := desc.Fields().ByName(name)
+		if fd != nil {
+			ref.Set(fd, protoreflect.ValueOfMessage(vidMsg.ProtoReflect()))
+			// Clear the regular video message
+			msg.VideoMessage = nil
+			return
+		}
+	}
+
+	// 2. Raw injection - Field 43 (ptvMessage)
+	vidBytes, err := proto.Marshal(vidMsg)
+	if err != nil {
+		return
+	}
+
+	existing := ref.GetUnknown()
+	tag43 := encodeVarint(uint64(43<<3 | 2))
+	existing = append(existing, tag43...)
+	lengthVarint := encodeVarint(uint64(len(vidBytes)))
+	existing = append(existing, lengthVarint...)
+	existing = append(existing, vidBytes...)
+
+	ref.SetUnknown(existing)
+	msg.VideoMessage = nil
+}
+
+var _ = proto.Marshal
 
 const (
 	openGraphFetchTimeout    = 5 * time.Second

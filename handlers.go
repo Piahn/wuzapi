@@ -1559,6 +1559,9 @@ func (s *server) SendVideo() http.HandlerFunc {
 		Id            string
 		JPEGThumbnail []byte
 		MimeType      string
+		PTV           bool   `json:"PTV,omitempty"`
+		PTVideo       bool   `json:"PTVideo,omitempty"` // For backward compatibility
+		ViewOnce      bool   `json:"ViewOnce,omitempty"`
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 		Expiration    uint32         `json:"Expiration,omitempty"`
@@ -1648,8 +1651,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			return
 		}
 
-		msg := &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
-			Caption:    proto.String(t.Caption),
+		videoMsg := &waE2E.VideoMessage{
 			URL:        proto.String(uploaded.URL),
 			DirectPath: proto.String(uploaded.DirectPath),
 			MediaKey:   uploaded.MediaKey,
@@ -1663,7 +1665,18 @@ func (s *server) SendVideo() http.HandlerFunc {
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
 			JPEGThumbnail: t.JPEGThumbnail,
-		}}
+			ViewOnce:      proto.Bool(t.ViewOnce),
+		}
+
+		if !t.ViewOnce {
+			videoMsg.Caption = proto.String(t.Caption)
+		}
+
+		msg := &waE2E.Message{VideoMessage: videoMsg}
+
+		if t.PTVideo || t.PTV {
+			convertToPTVMessage(msg)
+		}
 
 		if t.ContextInfo.StanzaID != nil {
 			var qm *waE2E.Message
@@ -1762,6 +1775,7 @@ func (s *server) SendMediaStream() http.HandlerFunc {
 		stanzaID := r.FormValue("StanzaId")
 		participant := r.FormValue("Participant")
 		expirationStr := r.FormValue("Expiration")
+		ptVideoStr := r.FormValue("PTVideo")
 
 		if phone == "" || mediaType == "" {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone or MediaType in form"))
@@ -1856,8 +1870,8 @@ func (s *server) SendMediaStream() http.HandlerFunc {
 				FileLength:    proto.Uint64(uint64(len(filedata))),
 			}
 		case "video":
-			msg.VideoMessage = &waE2E.VideoMessage{
-				Caption:       proto.String(caption),
+			viewOnce := r.FormValue("ViewOnce") == "true" || r.FormValue("ViewOnce") == "1"
+			videoMsg := &waE2E.VideoMessage{
 				URL:           proto.String(uploaded.URL),
 				DirectPath:    proto.String(uploaded.DirectPath),
 				MediaKey:      uploaded.MediaKey,
@@ -1865,6 +1879,14 @@ func (s *server) SendMediaStream() http.HandlerFunc {
 				FileEncSHA256: uploaded.FileEncSHA256,
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uint64(len(filedata))),
+				ViewOnce:      proto.Bool(viewOnce),
+			}
+			if !viewOnce {
+				videoMsg.Caption = proto.String(caption)
+			}
+			msg.VideoMessage = videoMsg
+			if ptVideoStr == "true" || ptVideoStr == "1" || r.FormValue("PTV") == "true" || r.FormValue("PTV") == "1" {
+				convertToPTVMessage(msg)
 			}
 		case "audio":
 			msg.AudioMessage = &waE2E.AudioMessage{
