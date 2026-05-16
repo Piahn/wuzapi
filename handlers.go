@@ -1562,6 +1562,8 @@ func (s *server) SendVideo() http.HandlerFunc {
 		PTV           bool   `json:"PTV,omitempty"`
 		PTVideo       bool   `json:"PTVideo,omitempty"` // For backward compatibility
 		ViewOnce      bool   `json:"ViewOnce,omitempty"`
+		Gif           bool   `json:"Gif,omitempty"`
+		GifAttribution uint32 `json:"GifAttribution,omitempty"` // 0=NONE, 1=GIPHY, 2=TENOR, 3=KLIPY
 		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 		Expiration    uint32         `json:"Expiration,omitempty"`
@@ -1670,6 +1672,13 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 		if !t.ViewOnce {
 			videoMsg.Caption = proto.String(t.Caption)
+		}
+
+		// GIF mode: loop tanpa tombol play
+		if t.Gif {
+			videoMsg.GifPlayback = proto.Bool(true)
+			attribution := waE2E.VideoMessage_Attribution(t.GifAttribution)
+			videoMsg.GifAttribution = &attribution
 		}
 
 		msg := &waE2E.Message{VideoMessage: videoMsg}
