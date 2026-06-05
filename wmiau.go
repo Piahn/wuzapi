@@ -33,6 +33,42 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// sentMsgIDs tidak lagi digunakan — digantikan oleh SQLite-based dedup
+// var sentMsgIDs sync.Map
+
+// startProcessedMsgCleanup membersihkan entry lama dari processed_messages setiap 5 menit.
+// Dipanggil sekali saat startup.
+func startProcessedMsgCleanup(db *sqlx.DB) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cutoff := time.Now().Add(-2 * time.Minute)
+			_, err := db.Exec(`DELETE FROM processed_messages WHERE created_at < ?`, cutoff)
+			if err != nil {
+				log.Warn().Err(err).Msg("[Dedup] Failed to cleanup processed_messages")
+			}
+		}
+	}()
+}
+
+// markSent menggunakan tabel SQLite shared untuk deduplication lintas server.
+// INSERT OR IGNORE: jika msg_id sudah ada (server lain sudah insert), tidak ada error
+// dan RowsAffected == 0, artinya sudah diproses.
+func markSent(db *sqlx.DB, msgID string) bool {
+	result, err := db.Exec(
+		`INSERT OR IGNORE INTO processed_messages (msg_id, created_at) VALUES (?, ?)`,
+		msgID, time.Now(),
+	)
+	if err != nil {
+		// Fallback: jika error DB, izinkan proses (lebih baik duplikat daripada drop)
+		log.Warn().Err(err).Str("msgID", msgID).Msg("[Dedup] DB error, allowing message through")
+		return true
+	}
+	rows, _ := result.RowsAffected()
+	return rows > 0 // true = first time, false = sudah diproses server lain
+}
+
 // db field declaration as *sqlx.DB
 type MyClient struct {
 	WAClient       *whatsmeow.Client
@@ -849,6 +885,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		log.Info().Msg("Received StreamReplaced event")
 		return
 	case *events.Message:
+		// Global deduplication (cross-server): Skip jika server Wuzapi lain sudah memproses pesan ini.
+		// Menggunakan SQLite shared DB — INSERT OR IGNORE, jika RowsAffected==0 berarti duplikat.
+		if evt.Info.ID != "" && !markSent(mycli.db, evt.Info.ID) {
+			log.Debug().Str("msgid", evt.Info.ID).Str("userid", txtid).Msg("Duplicate message event skipped (cross-server deduplicated)")
+			return
+		}
 
 		var s3Config struct {
 			Enabled       string `db:"s3_enabled"`

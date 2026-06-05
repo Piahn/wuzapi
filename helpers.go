@@ -315,6 +315,10 @@ func callHookWithHmac(myurl string, payload map[string]string, userID string, en
 	log.Info().Str("url", myurl).Str("userID", userID).Msg("Sending POST to client with retry logic")
 
 	client := clientManager.GetHTTPClient(userID)
+	if client == nil {
+		log.Warn().Str("userID", userID).Msg("resty client is nil, skipping webhook to prevent panic")
+		return
+	}
 
 	// Retry settings
 	maxRetries := 1
@@ -467,6 +471,10 @@ func callHookFileWithHmac(myurl string, payload map[string]string, userID string
 	log.Info().Str("file", file).Str("url", myurl).Msg("Sending POST with retry logic")
 
 	client := clientManager.GetHTTPClient(userID)
+	if client == nil {
+		log.Warn().Str("userID", userID).Msg("resty client is nil, skipping file webhook to prevent panic")
+		return nil
+	}
 
 	maxRetries := 1
 	if *webhookRetryEnabled {

@@ -397,6 +397,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start background cleanup for processed messages (deduplication)
+	startProcessedMsgCleanup(db)
+
 	var dbLog waLog.Logger
 	if *waDebug != "" {
 		dbLog = waLog.Stdout("Database", *waDebug, *colorOutput)

@@ -5831,6 +5831,12 @@ func (s *server) DeleteUserComplete() http.HandlerFunc {
 
 // Respond to client
 func (s *server) Respond(w http.ResponseWriter, r *http.Request, status int, data interface{}) {
+	// Cek kalau client sudah disconnect (misal bot sudah timeout duluan)
+	if err := r.Context().Err(); err != nil {
+		log.Warn().Err(err).Msg("client disconnected, skipping response")
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
@@ -5856,7 +5862,8 @@ func (s *server) Respond(w http.ResponseWriter, r *http.Request, status int, dat
 	}
 
 	if err := json.NewEncoder(w).Encode(dataenvelope); err != nil {
-		panic("respond: " + err.Error())
+		// Jangan panic saat write ke closed connection (broken pipe)
+		log.Error().Err(err).Msg("respond: failed to write json response (possibly broken pipe)")
 	}
 }
 

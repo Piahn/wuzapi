@@ -75,7 +75,28 @@ var migrations = []Migration{
 		Name:  "add_whatsmeow_message_secrets_message_id_idx",
 		UpSQL: addWhatsmeowMessageSecretsMessageIDIndexSQL,
 	},
+	{
+		ID:    10,
+		Name:  "add_processed_messages",
+		UpSQL: addProcessedMessagesSQL,
+	},
 }
+
+const addProcessedMessagesSQL = `
+-- PostgreSQL version
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'processed_messages') THEN
+        CREATE TABLE processed_messages (
+            msg_id TEXT PRIMARY KEY,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX idx_processed_messages_created_at ON processed_messages(created_at);
+    END IF;
+END $$;
+
+-- SQLite version (handled in code)
+`
 
 const changeIDToStringSQL = `
 -- Migration to change ID from integer to random string
@@ -450,6 +471,21 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 	} else if migration.ID == 9 {
 		if db.DriverName() == "sqlite" {
 			err = nil
+		} else {
+			_, err = tx.Exec(migration.UpSQL)
+		}
+	} else if migration.ID == 10 {
+		if db.DriverName() == "sqlite" {
+			err = createTableIfNotExistsSQLite(tx, "processed_messages", `
+				CREATE TABLE processed_messages (
+					msg_id TEXT PRIMARY KEY,
+					created_at DATETIME NOT NULL
+				)`)
+			if err == nil {
+				_, err = tx.Exec(`
+					CREATE INDEX IF NOT EXISTS idx_processed_messages_created_at 
+					ON processed_messages (created_at)`)
+			}
 		} else {
 			_, err = tx.Exec(migration.UpSQL)
 		}
